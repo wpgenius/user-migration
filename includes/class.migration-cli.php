@@ -48,6 +48,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
             }
 
             $users = get_users( $args );
+            $total = count( $users );
+            
+            WP_CLI::success( "Total $total users found." );
 
             $headers = ['ID', 'user_login', 'user_email', 'user_pass', 'display_name', 'roles', 'capabilities'];
             $meta_keys = [];
@@ -63,7 +66,6 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
             $fp = fopen( $file, 'w' );
             fputcsv( $fp, $headers );
 
-            $total = count( $users );
             $counter = 0;
 
             foreach ( $users as $user ) {
