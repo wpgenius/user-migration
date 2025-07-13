@@ -37,14 +37,17 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
             $file = $assoc_args['file'];
             $filter_roles = isset( $assoc_args['roles'] ) ? explode( ',', $assoc_args['roles'] ) : [];
 
-            $users = get_users();
-            usort( $users, fn( $a, $b ) => $a->ID <=> $b->ID );
+            $args = [
+                'orderby' => 'ID',
+                'order'   => 'ASC',
+                'number'  => -1,
+            ];
 
             if ( $filter_roles ) {
-                $users = array_filter( $users, function ( $user ) use ( $filter_roles ) {
-                    return array_intersect( $user->roles, $filter_roles );
-                } );
+                $args['role__in'] = $filter_roles;
             }
+
+            $users = get_users( $args );
 
             $headers = ['ID', 'user_login', 'user_email', 'user_pass', 'display_name', 'roles', 'capabilities'];
             $meta_keys = [];
