@@ -3,7 +3,7 @@
 Plugin Name: User Migration CLI
 Plugin URI: https://wpgenius.in
 Description: Export and import users (with meta, roles, capabilities, passwords, and IDs) using WP-CLI.
-Version: 1.0
+Version: 1.1
 Author: Makarand Mane
 Author URI: https://makarandmane.com
 Text Domain: user-migration
@@ -19,8 +19,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'UMC_DIR_URL', plugin_dir_url( __FILE__ ) );
 define( 'UMC_DIR_PATH', plugin_dir_path( __FILE__ ) );
 
-include_once UMC_DIR_PATH.'includes/class.wgec-init.php';
 include_once UMC_DIR_PATH.'includes/class.migration-cli.php';
+
+//include_once UMC_DIR_PATH.'includes/class.wgec-init.php';
 // include_once UMC_DIR_PATH.'includes/class.wgec-database.php';
 // include_once UMC_DIR_PATH.'includes/class.wgec-ajax.php';
 // include_once UMC_DIR_PATH.'includes/class.wgec-admin.php';
