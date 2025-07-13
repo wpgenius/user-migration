@@ -3,7 +3,7 @@
 Plugin Name: User Migration CLI
 Plugin URI: https://wpgenius.in
 Description: Export and import users (with meta, roles, capabilities, passwords, and IDs) using WP-CLI.
-Version: 1.1
+Version: 1.2
 Author: Makarand Mane
 Author URI: https://makarandmane.com
 Text Domain: user-migration

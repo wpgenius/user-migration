@@ -15,9 +15,37 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
     class User_Migration_CLI {
 
+        /**
+         * Export users with metadata, roles, and password hashes to CSV.
+         *
+         * ## OPTIONS
+         *
+         * --file=<file>
+         * : The output CSV file path.
+         *
+         * [--roles=<roles>]
+         * : Comma-separated roles to export (e.g., "subscriber,customer").
+         *
+         * ## EXAMPLES
+         *
+         *     wp user-migration export --file=users.csv
+         *     wp user-migration export --file=customers.csv --roles=subscriber,customer
+         *
+         * @when after_wp_load
+         */
         public function export( $args, $assoc_args ) {
             $file = $assoc_args['file'];
+            $filter_roles = isset( $assoc_args['roles'] ) ? explode( ',', $assoc_args['roles'] ) : [];
+
             $users = get_users();
+            usort( $users, fn( $a, $b ) => $a->ID <=> $b->ID );
+
+            if ( $filter_roles ) {
+                $users = array_filter( $users, function ( $user ) use ( $filter_roles ) {
+                    return array_intersect( $user->roles, $filter_roles );
+                } );
+            }
+
             $headers = ['ID', 'user_login', 'user_email', 'user_pass', 'display_name', 'roles', 'capabilities'];
             $meta_keys = [];
 
@@ -32,6 +60,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
             $fp = fopen( $file, 'w' );
             fputcsv( $fp, $headers );
 
+            $total = count( $users );
+            $counter = 0;
+
             foreach ( $users as $user ) {
                 $row = [
                     $user->ID,
@@ -44,21 +75,46 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
                 ];
 
                 foreach ( $meta_keys as $key ) {
-                    $meta_val = get_user_meta( $user->ID, $key, true );
-                    $row[] = is_array( $meta_val ) ? maybe_serialize( $meta_val ) : $meta_val;
+                    $val = get_user_meta( $user->ID, $key, true );
+                    $row[] = is_array( $val ) ? maybe_serialize( $val ) : $val;
                 }
 
                 fputcsv( $fp, $row );
+                $counter++;
+                echo "\rExporting: $counter of $total";
             }
 
             fclose( $fp );
-            WP_CLI::success( count( $users ) . " users exported to $file" );
+            WP_CLI::line(""); // Clear progress line
+            WP_CLI::success( "$total users exported to $file" );
         }
 
+        /**
+         * Import users from CSV with metadata and roles.
+         *
+         * ## OPTIONS
+         *
+         * --file=<file>
+         * : The input CSV file path.
+         *
+         * [--roles=<roles>]
+         * : Comma-separated roles to filter and import.
+         *
+         * [--dry-run]
+         * : Perform a dry run without actual import.
+         *
+         * ## EXAMPLES
+         *
+         *     wp user-migration import --file=users.csv --dry-run
+         *     wp user-migration import --file=users.csv
+         *     wp user-migration import --file=users.csv --roles=subscriber,customer --dry-run
+         *
+         * @when after_wp_load
+         */
         public function import( $args, $assoc_args ) {
             $file = $assoc_args['file'];
             $dry_run = isset( $assoc_args['dry-run'] );
-            $conflict_file = dirname( $file ) . '/conflicts.csv';
+            $filter_roles = isset( $assoc_args['roles'] ) ? explode( ',', $assoc_args['roles'] ) : [];
 
             if ( ! file_exists( $file ) ) {
                 WP_CLI::error( "File $file not found." );
@@ -66,81 +122,97 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 
             $handle = fopen( $file, 'r' );
             $headers = fgetcsv( $handle );
-
-            $conflict_fp = fopen( $conflict_file, 'w' );
-            fputcsv( $conflict_fp, $headers );
-
-            $imported = 0;
-            $conflicted = 0;
-
-            global $wpdb;
+            $rows = [];
 
             while ( $row = fgetcsv( $handle ) ) {
-                $data = array_combine( $headers, $row );
-                $user_id = (int) $data['ID'];
+                $rows[] = array_combine( $headers, $row );
+            }
 
-                $user_exists = $wpdb->get_var( $wpdb->prepare( "SELECT ID FROM {$wpdb->users} WHERE ID = %d", $user_id ) );
+            fclose( $handle );
 
-                if ( $user_exists ) {
-                    fputcsv( $conflict_fp, $row );
-                    WP_CLI::log( "Skipped (ID exists): {$data['user_login']} (ID: $user_id)" );
-                    $conflicted++;
+            $imported = 0;
+            $skipped = 0;
+            $conflicts = [];
+            $total = count( $rows );
+            $counter = 0;
+
+            foreach ( $rows as $data ) {
+                $counter++;
+
+                $user_roles = explode( ',', $data['roles'] );
+                if ( $filter_roles && ! array_intersect( $filter_roles, $user_roles ) ) {
+                    continue;
+                }
+
+                $existing_user = get_user_by( 'id', $data['ID'] );
+                if ( $existing_user ) {
+                    $conflicts[] = $data;
                     continue;
                 }
 
                 if ( $dry_run ) {
-                    WP_CLI::log( "DRY RUN: Would import user {$data['user_login']} with ID {$user_id}" );
+                    WP_CLI::log( "DRY RUN: Would import user ID {$data['ID']} - {$data['user_login']}" );
                     $imported++;
                     continue;
                 }
 
-                // Manually insert into wp_users with ID
-                $result = $wpdb->insert(
-                    $wpdb->users,
-                    [
-                        'ID'           => $user_id,
-                        'user_login'   => $data['user_login'],
-                        'user_pass'    => $data['user_pass'],
-                        'user_email'   => $data['user_email'],
-                        'display_name' => $data['display_name'],
-                        'user_registered' => current_time( 'mysql' ),
-                    ]
-                );
+                $user_id = wp_insert_user( [
+                    'ID'            => $data['ID'],
+                    'user_login'    => $data['user_login'],
+                    'user_email'    => $data['user_email'],
+                    'user_pass'     => wp_generate_password( 32 ),
+                    'display_name'  => $data['display_name'],
+                ] );
 
-                if ( $result === false ) {
-                    WP_CLI::warning( "Failed to insert user {$data['user_login']}" );
+                if ( is_wp_error( $user_id ) ) {
+                    WP_CLI::warning( "Failed to import {$data['user_login']} - " . $user_id->get_error_message() );
+                    $skipped++;
                     continue;
                 }
 
-                // Set roles
-                $roles = explode( ',', $data['roles'] );
+                global $wpdb;
+                $wpdb->update( $wpdb->users, [ 'user_pass' => $data['user_pass'] ], [ 'ID' => $user_id ] );
+
                 $user = new WP_User( $user_id );
-                foreach ( $roles as $role ) {
+                foreach ( $user_roles as $role ) {
                     if ( $role ) {
                         $user->add_role( trim( $role ) );
                     }
                 }
 
-                // Set capabilities
                 if ( isset( $data['capabilities'] ) ) {
                     update_user_meta( $user_id, 'wp_capabilities', maybe_unserialize( $data['capabilities'] ) );
                 }
 
-                // Add user meta
                 foreach ( $headers as $key ) {
-                    if ( in_array( $key, ['ID','user_login','user_email','user_pass','display_name','roles','capabilities'] ) ) continue;
+                    if ( in_array( $key, ['ID', 'user_login','user_email','user_pass','display_name','roles','capabilities'] ) ) {
+                        continue;
+                    }
                     $val = maybe_unserialize( $data[ $key ] );
                     update_user_meta( $user_id, $key, $val );
                 }
 
-                WP_CLI::log( "Imported: {$data['user_login']} (ID: $user_id)" );
+                echo "\rImported: $counter of $total";
                 $imported++;
             }
 
-            fclose( $handle );
-            fclose( $conflict_fp );
+            WP_CLI::line(""); // Clean progress line
+            WP_CLI::success( "$imported users imported. $skipped skipped. " . count( $conflicts ) . " conflicts." );
 
-            WP_CLI::success( "$imported users imported. $conflicted skipped due to ID conflict (see $conflict_file)." );
+            if ( ! empty( $conflicts ) && ! $dry_run ) {
+                $conflict_file = dirname( $file ) . '/conflicts.csv';
+                $fp = fopen( $conflict_file, 'w' );
+                fputcsv( $fp, $headers );
+                foreach ( $conflicts as $row ) {
+                    fputcsv( $fp, $row );
+                }
+                fclose( $fp );
+
+                WP_CLI::confirm( "Importing conflicted users from conflicts.csv. Continue?" );
+                $assoc_args['file'] = $conflict_file;
+                unset( $assoc_args['dry-run'] );
+                $this->import( $args, $assoc_args );
+            }
         }
     }
 
